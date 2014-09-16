@@ -1,5 +1,14 @@
 #include <stdio.h>
 #include <math.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <stdint.h>
+#include <sys/mman.h>
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE             /* See feature_test_macros(7) */
+#endif
+#include <sched.h>
+
 #include <algorithm>
 
 #define SM2(x,y) ((x)+(y))
@@ -20,45 +29,18 @@ typedef float FV __attribute__((vector_size(V_SZ)));
 
 #define FORCE_READ(p,o) (*((volatile FV*)(p+o)))
 #define FORCE_WRITE(p,i,x) (*(volatile FV*)(p+i))=x
-#if 0
-/*
- *Add in to results the contributions from the otherUnits and multiply resulting value by multipliers.
- *otherUnits are read using FORCE_READ to get latest values wrtten by other CPUs.
- *results has already been initialized with a partal contribution.
- */
-void getSumOtherContributions(FV* results,FV** otherUnits,FV* multipliers,int noOtherUnits,int noBlks)
-{
-    int i=0;
-    do{
-        FV acc=*results;
-        int j=0;
-        do{
-            acc=acc+FORCE_READ(otherUnits[i],j);
-        }while (++j<noOtherUnits);
-        results[i]=acc*multipliers[i];
-    }while(++i<noBlks);
-}
 
-/*
- *Add in to results the contributions from the otherUnits and multiply resulting value by multipliers.
- *otherUnits are read using FORCE_READ to get latest values wrtten by other CPUs.
- *results has already been initialized with a partal contribution.
- *Do the accumulation in 2 levels in order to reduce a bit the prec
- */
-void accSumOtherContributions2(FV* results,FV** otherUnits,FV* multipliers,int noOtherUnits,int noBlks)
-{
-    FV bigAcc=FV_ZERO();
-    int i=0;
-    do{
-        FV acc=*results;
-        int j=0;
-        do{
-            acc=acc+FORCE_READ(otherUnits[i],j);
-        }while (++j<noOtherUnits);
-        bigAcc=fma(acc,multipliers[i],bigAcc);
-    }while(++i<noBlks);
-}
-#endif
+struct Memory {
+    FV* original;
+    FV* publishedPredictions[NO_CPUS];
+    FV* parameterEstimates[NO_CPUS];
+    FV* perThread1;
+    FV* perThread2;
+    FV* perThread3;
+    int32_t* syncFutexes;
+    int ourIdx;
+};
+
 /*
  *Add in to results the contributions from the otherUnits and multiply resulting value by multipliers.
  *otherUnits are read using FORCE_READ to get latest values wrtten by other CPUs.
@@ -155,26 +137,54 @@ void cubicsolve2(FV *result,FV p,FV q,FV x)
     *result=x;
 }
 
+void* allocSharedArray(int no32BitWords)
+{
+    void *p=mmap(0,4*no32BitWords,PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS,0,0);
+    return p;
+}
+
+void setupSharedMemoryAreas(Memory *mem)
+{
+    mem->original=0;
+    for(int i=0;i<NO_CPUS;++i){
+        mem->publishedPredictions[i]=reinterpret_cast<FV*>(allocSharedArray(0));
+        mem->parameterEstimates[i]=reinterpret_cast<FV*>(allocSharedArray(0));
+    }
+    mem->perThread1=0;
+    mem->perThread2=0;
+    mem->perThread3=0;
+    mem->syncFutexes=reinterpret_cast<int*>(allocSharedArray(0));
+    mem->syncFutexes[0]=NO_CPUS;
+    mem->ourIdx=-1;
+}
+
+void runAThread(Memory *mem)
+{
+
+}
+
+void
+fireUpForks(Memory *mem)
+{
+    pid_t pids[NO_CPUS];
+    pid_t parentPID=getpid();
+    for(int i=0;i<NO_CPUS;++i){
+        pid_t thisPID;
+        if((thisPID=getpid())!=0){//we're the child
+            mem->ourIdx=i;
+            int err=sched_setaffinity(thisPID,NO_CPUS,0);
+            runAThread(mem);
+            _exit(0);
+        }
+    }
+
+}
+
 
 int main(int argc,char* argv[])
 {
-    const FV st={0,0,0,0};
-    FV sum={0,0,0,0};
-    int i;
-    for(i=0;i<1000000;++i){
-        FV r;
-        FV p1={float(4*i),float(4*i+1),float(4*i+2),float(i+3)};
-        FV m1={float(-1),float(-1),float(-1),float(-1)};
-        m1=m1* p1;
-        solveDepressedCubic(&r,p1,p1,st);
-        sum+=r;
-        solveDepressedCubic(&r,p1,m1,st);
-        sum+=r;
-        solveDepressedCubic(&r,m1,p1,st);
-        sum+=r;
-        solveDepressedCubic(&r,m1,m1,st);
-        sum+=r;
-    }
-    printf("%g",*((double*)&sum));
+    Memory mem;
+    fireUpForks(&mem);
+
     return 0;
 }
