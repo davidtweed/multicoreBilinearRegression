@@ -5,11 +5,12 @@
 #include <stdint.h>
 #include <sys/mman.h>
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE             /* See feature_test_macros(7) */
+#define _GNU_SOURCE
 #endif
 #include <sched.h>
 
 #include <algorithm>
+#include <assert.h>
 
 #define SM2(x,y) ((x)+(y))
 #define SM4(x,y,z,w) SM2(SM2(x,y),SM2(z,w))
@@ -25,18 +26,27 @@
 #define V_SZ (4*V_LN)
 typedef float FV __attribute__((vector_size(V_SZ)));
 
+#if V_LN==8 /*kludgy way of detecting avx with its fma instruction*/
 #define fma(a,b,c) (a)*(b)+(c)
+#else
+#define fma(a,b,c) (a)*(b)+(c)
+#endif
 
 #define FORCE_READ(p,o) (*((volatile FV*)(p+o)))
 #define FORCE_WRITE(p,i,x) (*(volatile FV*)(p+i))=x
 
+struct ControlData {
+    float initLambda,lamdaStep,lambdaLIm;
+};
+
 struct Memory {
-    FV* original;
+    float *sharedParams;
+    FV** original;
     FV* publishedPredictions[NO_CPUS];
     FV* parameterEstimates[NO_CPUS];
-    FV* perThread1;
-    FV* perThread2;
-    FV* perThread3;
+    FV*** perThread1;
+    FV*** perThread2;
+    FV*** perThread3;
     int32_t* syncFutexes;
     int ourIdx;
 };
@@ -49,6 +59,7 @@ struct Memory {
  */
 void accSumOtherContributions(FV* results,FV* ourValues,FV** otherUnits,FV *correction,FV* multipliers,int noOtherUnits,int noBlks)
 {
+    assert(noOtherUnits==NO_CPUS);
     FV bigAcc0=FV_ZERO(),bigAcc1=FV_ZERO(),bigAcc2=FV_ZERO(),bigAcc3=FV_ZERO();
     int i=0;
     do{
@@ -56,7 +67,7 @@ void accSumOtherContributions(FV* results,FV* ourValues,FV** otherUnits,FV *corr
         int unit=0;
         do{
             acc=acc+FORCE_READ(otherUnits[unit],i);
-        }while (++unit<noOtherUnits);
+        }while (++unit<NO_CPUS);
         bigAcc0=fma((acc-correction[0]),multipliers[0],bigAcc0);
         bigAcc1=fma((acc-correction[1]),multipliers[1],bigAcc1);
         bigAcc2=fma((acc-correction[2]),multipliers[2],bigAcc2);
@@ -102,7 +113,7 @@ void prepareMultipliers(FV* multipliers,int noBlks)
 }
 
 /*solve a vector of depressed cubics*/
-inline
+//inline
 void solveDepressedCubic(FV *result, FV p,FV q,FV x)
 {
     int l;
@@ -118,8 +129,7 @@ void solveDepressedCubic(FV *result, FV p,FV q,FV x)
     *result=x;
 }
 
-
-inline
+//inline
 void cubicsolve2(FV *result,FV p,FV q,FV x)
 {
     int l;
@@ -143,9 +153,33 @@ void* allocSharedArray(int no32BitWords)
     return p;
 }
 
+template<class T>
+T** add2DSuperstructure(void* raw,int noRows,int noCols)
+{
+    T* p=reinterpret_cast<T*>(raw);
+    T** super=new T*[noRows];
+    for(int i=0;i<noRows;++i){
+        super[i]=&(p[i*noCols]);
+    }
+    return super;
+}
+
+template<class T>
+T*** add3DSuperstructure(void* raw,int noRows,int noCols)
+{
+    T* p=reinterpret_cast<T*>(raw);
+    T** super=new T*[noRows];
+    for(int i=0;i<noRows;++i){
+        super[i]=&(p[i*noCols]);
+    }
+    return &super;
+}
+
 void setupSharedMemoryAreas(Memory *mem)
 {
-    mem->original=0;
+    int r,c;
+    mem->sharedParams=reinterpret_cast<float*>(allocSharedArray(1));
+    mem->original=add2DSuperstructure<FV>(allocSharedArray(0),r,c);
     for(int i=0;i<NO_CPUS;++i){
         mem->publishedPredictions[i]=reinterpret_cast<FV*>(allocSharedArray(0));
         mem->parameterEstimates[i]=reinterpret_cast<FV*>(allocSharedArray(0));
@@ -164,7 +198,7 @@ void runAThread(Memory *mem)
 }
 
 void
-fireUpForks(Memory *mem)
+fireUpForks(ControlData *control,Memory *mem)
 {
     pid_t pids[NO_CPUS];
     pid_t parentPID=getpid();
@@ -183,8 +217,9 @@ fireUpForks(Memory *mem)
 
 int main(int argc,char* argv[])
 {
+    ControlData ctrl;
     Memory mem;
-    fireUpForks(&mem);
+    fireUpForks(&ctrl,&mem);
 
     return 0;
 }
