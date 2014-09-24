@@ -61,6 +61,8 @@ struct Memory {
     FV*** perThread3;
     int32_t* syncFutexes;
     int ourIdx;
+    int noParams,noNonZero;
+    int* nonzeroParams;//local to the core working on this
 };
 
 //================== inter-CPU data reading/writing ===============
@@ -182,12 +184,26 @@ void formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *param
         FV t0=*result-*corrections;//we've kept some corrections here
         FV t1=*here/t0;
         FV t2=*params/t0;
-//        BV toKeep=(t2>=thresh) | (t2<=-thresh);//record which should be moved to zero
+        BV toKeep=(t2>=thresh) | (t2<=-thresh);//record which should be moved to zero
         //get the update which is correct outside the threshold region
         OUTSIDE_THRESH_UPDATE(result,t1,t2,*params,thresh,householderIter);
         FV zeroes=FV_ZERO();
-//        *result=toKeep ? (*result) : zeroes;
+        *result=toKeep ? (*result) : zeroes;
     }while(--noBlks>0);
+}
+
+void f()
+{
+    FV* result;
+    formAndSolveUpdate(result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int householderIter);
+    //put the results back into the correct place
+    float *arr=reinterpret_cast<float*>(result);
+    int i;
+    for(i=0;i<noBlks*FV_LN;++i){
+        if(arr[i]==0.0f){
+            //remove from non-zero bitmap
+        }
+    }
 }
 
 //================= setting up data structures ===================
