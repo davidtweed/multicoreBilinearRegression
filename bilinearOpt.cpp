@@ -45,6 +45,18 @@ typedef int BV __attribute__((vector_size(V_SZ)));
 #define FORCE_READ(p,o) (*((volatile FV*)(p+o)))
 #define FORCE_WRITE(p,i,x) (*(volatile FV*)(p+i))=x
 
+inline
+float horizSum(FV v)
+{
+    return 0;
+}
+
+inline
+float horizMax(FV v)
+{
+    return 0;
+}
+
 //================ Data structures =====================
 
 struct ControlData {
@@ -61,11 +73,22 @@ struct Memory {
     FV*** perThread3;
     int32_t* syncFutexes;
     int ourIdx;
-    int noParams,noNonZero;
+    int noParams,lastNonzeroParam;
     int* nonzeroParams;//local to the core working on this
 };
 
 //================== inter-CPU data reading/writing ===============
+
+/*TODO: add hierarchical summations*/
+//publish-sum-of-published arrays
+void p2psum(FV* output,FV *in1,FV* in2,int noBlks)
+{
+    int i=0;
+    do{
+        FV r=FORCE_READ(in1,i)+FORCE_READ(in2,i);
+        FORCE_WRITE(output,i,r);
+    }while(++i<noBlks);
+}
 
 /*
  *Add in to results the contributions from the otherUnits and multiply resulting value by multipliers.
@@ -78,19 +101,23 @@ struct Memory {
 void accSumOtherContributions(FV* results,FV* ourValues,FV** otherUnits,FV* multipliers,int noOtherUnits,int noBlks)
 {
     assert(noOtherUnits==NO_CPUS);
-    FV bigAcc0=FV_ZERO(),bigAcc1=FV_ZERO(),bigAcc2=FV_ZERO(),bigAcc3=FV_ZERO(),bigAcc4=FV_ZERO();
+    FV bigAcc0=FV_ZERO(),bigAcc1=FV_ZERO(),bigAcc2=FV_ZERO(),bigAcc3=FV_ZERO(),bigAcc4=FV_ZERO(),bigAcc5=FV_ZERO();
     int i=0;
     do{
-        FV acc=ourValues[i];
+        //FV acc=ourValues[i];
         int unit=0;
+#if 0
         do{
             acc=acc+FORCE_READ(otherUnits[unit],i);
         }while (++unit<NO_CPUS-1);
+#endif
+        FV acc=ourValues[i]+FORCE_READ(otherUnits[0],i);
         bigAcc0=fma(acc,multipliers[0],bigAcc0);
         bigAcc1=fma(acc,multipliers[1],bigAcc1);
         bigAcc2=fma(acc,multipliers[2],bigAcc2);
         bigAcc3=fma(acc,multipliers[3],bigAcc3);
         bigAcc4=fma(acc,multipliers[4],bigAcc4);
+        bigAcc5=fma(acc,multipliers[5],bigAcc5);
         multipliers+=6;
 
     }while(++i<noBlks);
@@ -99,6 +126,7 @@ void accSumOtherContributions(FV* results,FV* ourValues,FV** otherUnits,FV* mult
     results[2]=bigAcc2;
     results[3]=bigAcc3;
     results[4]=bigAcc4;
+    results[5]=bigAcc5;
 }
 
 /*
@@ -177,9 +205,10 @@ void updateL1(FV *result,FV p,FV q,FV x,float lambda,int householderIter)
 
 
 
-void formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int householderIter)
+float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int householderIter)
 {
     float thresh=lambda;
+    FV changes=FV_ZERO();
     do{
         FV t0=*result-*corrections;//we've kept some corrections here
         FV t1=*here/t0;
@@ -189,19 +218,32 @@ void formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *param
         OUTSIDE_THRESH_UPDATE(result,t1,t2,*params,thresh,householderIter);
         FV zeroes=FV_ZERO();
         *result=toKeep ? (*result) : zeroes;
+        FV diff=*result-*params;
+        diff=diff*diff;
+        changes=changes>diff?changes:diff;
     }while(--noBlks>0);
+    return horizMax(changes);
 }
 
-void f()
+void f(Memory *mem)
 {
+    const int noBlks=5;
     FV* result;
-    formAndSolveUpdate(result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int householderIter);
+    FV *others;
+    FV *corrections;
+    FV *here;
+    FV *params;
+    float lambda;
+    int householderIter;
+    float changeMagnitude=formAndSolveUpdate(result,others,corrections,here,params,lambda,noBlks,householderIter);
     //put the results back into the correct place
     float *arr=reinterpret_cast<float*>(result);
     int i;
-    for(i=0;i<noBlks*FV_LN;++i){
+    for(i=0;i<noBlks*V_LN;++i){
         if(arr[i]==0.0f){
             //remove from non-zero bitmap
+            std::swap(mem->nonzeroParams[i],mem->nonzeroParams[mem->lastNonzeroParam]);
+            mem->lastNonzeroParam-=1;
         }
     }
 }
