@@ -18,6 +18,10 @@
 #define SM4(x,y,z,w) SM2(SM2(x,y),SM2(z,w))
 #define SM8(a,b,c,d,e,f,g,h) SM2(SM4(a,b,c,d),SM4(e,f,g,h))
 
+#define SMF2(x,y) (FORCE_READ(x,i))+(FORCE_READ(y,i))
+#define SMF4(x,y,z,w) (SMF2(x,y))+(SMF2(z,w))
+#define SMF8(a,b,c,d,e,f,g,h) (SMF4(a,b,c,d))+(SMF4(e,f,g,h))
+
 #if L1_PENALTY
 #define OUTSIDE_THRESH_UPDATE updateL1
 #else
@@ -42,8 +46,8 @@ typedef int BV __attribute__((vector_size(V_SZ)));
 #define fma(a,b,c) (a)*(b)+(c)
 #endif
 
-#define FORCE_READ(p,o) (*((volatile FV*)(p+o)))
-#define FORCE_WRITE(p,i,x) (*(volatile FV*)(p+i))=x
+#define FORCE_READ(p,o) (*((volatile FV*)((p)+o)))
+#define FORCE_WRITE(p,i,x) (*(volatile FV*)((p)+i))=x
 
 inline
 float horizSum(FV v)
@@ -66,7 +70,8 @@ struct ControlData {
 struct Memory {
     float *sharedParams;
     FV** original;
-    FV* publishedPredictions[NO_CPUS];
+    //publishedPredictions[NO_CPUS] is set to the sum of the predictions minus the goal
+    FV* publishedPredictions[NO_CPUS+1];
     FV* parameterEstimates[NO_CPUS];
     FV*** perThread1;
     FV*** perThread2;
@@ -81,11 +86,32 @@ struct Memory {
 
 /*TODO: add hierarchical summations*/
 //publish-sum-of-published arrays
-void p2psum(FV* output,FV *in1,FV* in2,int noBlks)
+void p2psum2(FV* output,FV **in,FV* target,int noBlks)
 {
     int i=0;
     do{
-        FV r=FORCE_READ(in1,i)+FORCE_READ(in2,i);
+        FV r=SMF2(in[0],in[1]);
+        r=r-target[i];
+        FORCE_WRITE(output,i,r);
+    }while(++i<noBlks);
+}
+
+void p2psum4(FV* output,FV **in,FV* target,int noBlks)
+{
+    int i=0;
+    do{
+        FV r=SMF4(in[0],in[1],in[2],in[3]);
+        r=r-target[i];
+        FORCE_WRITE(output,i,r);
+    }while(++i<noBlks);
+}
+
+void p2psum8(FV* output,FV **in,FV* target,int noBlks)
+{
+    int i=0;
+    do{
+        FV r=SMF8(in[0],in[1],in[2],in[3],in[4],in[5],in[6],in[7]);
+        r=r-target[i];
         FORCE_WRITE(output,i,r);
     }while(++i<noBlks);
 }
