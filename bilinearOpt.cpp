@@ -78,14 +78,19 @@ struct Memory {
     FV*** perThread3;
     int32_t* syncFutexes;
     int ourIdx;
-    int noParams,lastNonzeroParam;
-    int* nonzeroParams;//local to the core working on this
+    int noParams;
+    /*std::bitset bits;*/
+      int lastNonzeroParam;
+    int* nonzeroParams;//local to the core working on this*/
 };
 
 //================== inter-CPU data reading/writing ===============
 
-/*TODO: add hierarchical summations*/
-//publish-sum-of-published arrays
+/*Publish-sum-of-published individual arrays.
+ *We want these routines to be as fast as possible
+ *to minimise the amount of skew in the data the
+ *other threads read.
+ */
 void p2psum2(FV* output,FV **in,FV* target,int noBlks)
 {
     int i=0;
@@ -116,6 +121,17 @@ void p2psum8(FV* output,FV **in,FV* target,int noBlks)
     }while(++i<noBlks);
 }
 
+void p2psum16(FV* output,FV **in,FV* target,int noBlks)
+{
+    int i=0;
+    do{
+        FV r=SMF8(in[0],in[1],in[2],in[3],in[4],in[5],in[6],in[7]);
+        r=r+SMF8(in[8],in[9],in[10],in[11],in[12],in[13],in[14],in[15]);
+        r=r-target[i];
+        FORCE_WRITE(output,i,r);
+    }while(++i<noBlks);
+}
+
 /*
  *Add in to results the contributions from the otherUnits and multiply resulting value by multipliers.
  *otherUnits are read using FORCE_READ to get latest values wrtten by other CPUs.
@@ -124,20 +140,12 @@ void p2psum8(FV* output,FV **in,FV* target,int noBlks)
  *to minimise the amount.
  *Doing 5 accumulations at once is the most possible before hitting register spills.
  */
-void accSumOtherContributions(FV* results,FV* ourValues,FV** otherUnits,FV* multipliers,int noOtherUnits,int noBlks)
+void accSumOtherContributions(FV* results,FV* corrections,FV* residual,FV* multipliers,int noOtherUnits,int noBlks)
 {
-    assert(noOtherUnits==NO_CPUS);
     FV bigAcc0=FV_ZERO(),bigAcc1=FV_ZERO(),bigAcc2=FV_ZERO(),bigAcc3=FV_ZERO(),bigAcc4=FV_ZERO(),bigAcc5=FV_ZERO();
     int i=0;
     do{
-        //FV acc=ourValues[i];
-        int unit=0;
-#if 0
-        do{
-            acc=acc+FORCE_READ(otherUnits[unit],i);
-        }while (++unit<NO_CPUS-1);
-#endif
-        FV acc=ourValues[i]+FORCE_READ(otherUnits[0],i);
+        FV acc=FORCE_READ(residual,i);
         bigAcc0=fma(acc,multipliers[0],bigAcc0);
         bigAcc1=fma(acc,multipliers[1],bigAcc1);
         bigAcc2=fma(acc,multipliers[2],bigAcc2);
@@ -145,14 +153,13 @@ void accSumOtherContributions(FV* results,FV* ourValues,FV** otherUnits,FV* mult
         bigAcc4=fma(acc,multipliers[4],bigAcc4);
         bigAcc5=fma(acc,multipliers[5],bigAcc5);
         multipliers+=6;
-
     }while(++i<noBlks);
-    results[0]=bigAcc0;
-    results[1]=bigAcc1;
-    results[2]=bigAcc2;
-    results[3]=bigAcc3;
-    results[4]=bigAcc4;
-    results[5]=bigAcc5;
+    results[0]=bigAcc0-corrections[0];
+    results[1]=bigAcc1-corrections[1];
+    results[2]=bigAcc2-corrections[2];
+    results[3]=bigAcc3-corrections[3];
+    results[4]=bigAcc4-corrections[4];
+    results[5]=bigAcc5-corrections[5];
 }
 
 /*
@@ -336,9 +343,25 @@ void exportSolution(ControlData *control,Memory *mem)
 
 }
 
-void runAThread(Memory *mem)
+void runAThread(ControlData *control,Memory *mem)
 {
-
+    if(mem->ourIdx==0){
+        FV* output;
+        FV **in;
+        FV* target;
+        int noBlks;
+        if(NO_CPUS==2){
+            p2psum2(output,in,target,noBlks);
+        }else if(NO_CPUS==4){
+            p2psum4(output,in,target,noBlks);
+        }else if(NO_CPUS==8){
+            p2psum8(output,in,target,noBlks);
+        }else if(NO_CPUS==16){
+            p2psum16(output,in,target,noBlks);
+        }else{
+            abort();
+        }
+    }
 }
 
 void
@@ -359,7 +382,7 @@ fireUpForks(ControlData *control,Memory *mem)
             CPU_SET(i,cpu_mask);
             int err=sched_setaffinity(0,sizeof(cpu_set_t),cpu_mask);
             CPU_FREE(cpu_mask);
-            runAThread(mem);
+            runAThread(control,mem);
             _exit(0);
         }
     }
