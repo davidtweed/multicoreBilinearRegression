@@ -79,8 +79,7 @@ struct Memory {
     int32_t* syncFutexes;
     int ourIdx;
     int noParams;
-    /*std::bitset bits;*/
-      int lastNonzeroParam;
+    int noNonzeroParams;
     int* nonzeroParams;//local to the core working on this*/
 };
 
@@ -162,6 +161,8 @@ void accSumOtherContributions(FV* results,FV* corrections,FV* residual,FV* multi
     results[5]=bigAcc5-corrections[5];
 }
 
+
+
 /*
  *Write pre-prepared values into the published array for this unit.
  *Use FORCE_WRITE to ensure results are written immediately, and use
@@ -192,6 +193,51 @@ void prepareMultipliers(FV* multipliers,int noBlks)
 {
 
 }
+
+//=================== general computations ===================
+//Compute for fixed I's the  sum_e a_I^(e)^2
+void getCoeffsSquared(FV* results,FV** data,int *entries,int noEntries,int noBlks)
+{
+    int i=0;
+    do{
+        FV c=FV_ZERO();
+        int j=0;
+        do{
+            FV a=data[i][j];
+            c=fma(a,a,c);
+        }while(++j<noBlks);
+        results[i]=c;
+    }while(++i<noEntries);
+}
+
+//Compute for each e sum_i a_i^(e) x_i , taking advantage of knowing which x_i are zero
+//to avoid unnecessary work.
+void getPrediction(FV* results,FV** data,float *params,int *entries,int noEntries,int noBlks)
+{
+    FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO(),acc4=FV_ZERO(),acc5=FV_ZERO();
+    int j=0;
+    do{
+        int iOrig=0;
+        do{
+            int i=entries[i];
+            FV p=FV_SET1(params[i]);
+            acc0=fma(data[i][j],p,acc0);
+            acc1=fma(data[i][j+1],p,acc1);
+            acc2=fma(data[i][j+2],p,acc2);
+            acc3=fma(data[i][j+3],p,acc3);
+            acc4=fma(data[i][j+4],p,acc4);
+            acc5=fma(data[i][j+5],p,acc5);
+        }while(++iOrig<noEntries);
+        results[j]=acc0;
+        results[j+1]=acc1;
+        results[j+2]=acc2;
+        results[j+3]=acc3;
+        results[j+4]=acc4;
+        results[j+5]=acc5;
+        j=j+6;
+    }while(j<noBlks);
+}
+
 
 //==================== update functions ======================
 
@@ -238,7 +284,7 @@ void updateL1(FV *result,FV p,FV q,FV x,float lambda,int householderIter)
 
 
 
-float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int householderIter)
+float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int* removers,int &noRemovals,int householderIter)
 {
     float thresh=lambda;
     FV changes=FV_ZERO();
@@ -254,6 +300,7 @@ float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *para
         FV diff=*result-*params;
         diff=diff*diff;
         changes=changes>diff?changes:diff;
+        //copy over into removers list
     }while(--noBlks>0);
     return horizMax(changes);
 }
@@ -261,6 +308,8 @@ float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *para
 void f(Memory *mem)
 {
     const int noBlks=5;
+    int noRemovals;
+    int removers[5*V_LN];
     FV* result;
     FV *others;
     FV *corrections;
@@ -268,17 +317,23 @@ void f(Memory *mem)
     FV *params;
     float lambda;
     int householderIter;
-    float changeMagnitude=formAndSolveUpdate(result,others,corrections,here,params,lambda,noBlks,householderIter);
+    float changeMagnitude=formAndSolveUpdate(result,others,corrections,here,params,lambda,noBlks,removers,noRemovals,householderIter);
     //put the results back into the correct place
     float *arr=reinterpret_cast<float*>(result);
     int i;
-    for(i=0;i<noBlks*V_LN;++i){
-        if(arr[i]==0.0f){
-            //remove from non-zero bitmap
-            std::swap(mem->nonzeroParams[i],mem->nonzeroParams[mem->lastNonzeroParam]);
-            mem->lastNonzeroParam-=1;
+    //remove new zeroes and compact the list of non-zeroParms------------------------------
+    int readPt=0,copyPt;
+    for(int removal=0;removal<noRemovals;++removal){
+        while(mem->nonzeroParams[readPt]<removers[removal]){
+            mem->nonzeroParams[copyPt++]=mem->nonzeroParams[readPt++];
         }
+        assert(removers[removal]==mem->nonzeroParams[readPt]);
+        ++readPt;
     }
+    while(readPt<mem->noNonzeroParams){
+        mem->nonzeroParams[copyPt++]=mem->nonzeroParams[readPt++];
+    }
+    mem->noNonzeroParams=copyPt;
 }
 
 //================= setting up data structures ===================
