@@ -46,17 +46,19 @@ typedef int BV __attribute__((vector_size(V_SZ)));
 #define fma(a,b,c) (a)*(b)+(c)
 #endif
 
+#define FORCE_READ_INT(p,o) (*((volatile int32_t*)((p)+o)))
+
 #define FORCE_READ(p,o) (*((volatile FV*)((p)+o)))
 #define FORCE_WRITE(p,i,x) (*(volatile FV*)((p)+i))=x
 
 inline
-float horizSum(FV v)
+float horizontalSum(FV v)
 {
     return 0;
 }
 
 inline
-float horizMax(FV v)
+float horizontalMax(FV v)
 {
     return 0;
 }
@@ -64,10 +66,11 @@ float horizMax(FV v)
 //================ Data structures =====================
 
 struct ControlData {
-    float initLambda,lamdaStep,lambdaLIm;
+    float initLambda,lambdaStep;
 };
 
 struct Memory {
+    float thisLambda;
     float *sharedParams;
     FV** original;
     //publishedPredictions[NO_CPUS] is set to the sum of the predictions minus the goal
@@ -77,6 +80,7 @@ struct Memory {
     FV*** perThread2;
     FV*** perThread3;
     int32_t* syncFutexes;
+    int32_t* sharedLambda;
     int ourIdx;
     int noParams;
     int noNonzeroParams;
@@ -88,47 +92,59 @@ struct Memory {
 /*Publish-sum-of-published individual arrays.
  *We want these routines to be as fast as possible
  *to minimise the amount of skew in the data the
- *other threads read.
+ *other threads read. Also return the total squared prediction error.
  */
-void p2psum2(FV* output,FV **in,FV* target,int noBlks)
+float p2psum2(FV* output,FV **in,FV* target,int noBlks)
 {
+    FV err=FV_ZERO();
     int i=0;
     do{
         FV r=SMF2(in[0],in[1]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
+        err=fma(r,r,err);
     }while(++i<noBlks);
+    return horizontalSum(err);
 }
 
-void p2psum4(FV* output,FV **in,FV* target,int noBlks)
+float p2psum4(FV* output,FV **in,FV* target,int noBlks)
 {
+    FV err=FV_ZERO();
     int i=0;
     do{
         FV r=SMF4(in[0],in[1],in[2],in[3]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
+        err=fma(r,r,err);
     }while(++i<noBlks);
+    return horizontalSum(err);
 }
 
-void p2psum8(FV* output,FV **in,FV* target,int noBlks)
+float p2psum8(FV* output,FV **in,FV* target,int noBlks)
 {
+    FV err=FV_ZERO();
     int i=0;
     do{
         FV r=SMF8(in[0],in[1],in[2],in[3],in[4],in[5],in[6],in[7]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
+        err=fma(r,r,err);
     }while(++i<noBlks);
+    return horizontalSum(err);
 }
 
-void p2psum16(FV* output,FV **in,FV* target,int noBlks)
+float p2psum16(FV* output,FV **in,FV* target,int noBlks)
 {
+    FV err=FV_ZERO();
     int i=0;
     do{
         FV r=SMF8(in[0],in[1],in[2],in[3],in[4],in[5],in[6],in[7]);
         r=r+SMF8(in[8],in[9],in[10],in[11],in[12],in[13],in[14],in[15]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
+        err=fma(r,r,err);
     }while(++i<noBlks);
+    return horizontalSum(err);
 }
 
 /*
@@ -196,7 +212,7 @@ void prepareMultipliers(FV* multipliers,int noBlks)
 
 //=================== general computations ===================
 //Compute for fixed I's the  sum_e a_I^(e)^2
-void getCoeffsSquared(FV* results,FV** data,int *entries,int noEntries,int noBlks)
+void getCoeffsSquared(float* results,FV** data,int *entries,int noEntries,int noBlks)
 {
     int i=0;
     do{
@@ -206,7 +222,7 @@ void getCoeffsSquared(FV* results,FV** data,int *entries,int noEntries,int noBlk
             FV a=data[i][j];
             c=fma(a,a,c);
         }while(++j<noBlks);
-        results[i]=c;
+        results[i]=horizontalSum(c);
     }while(++i<noEntries);
 }
 
@@ -214,12 +230,12 @@ void getCoeffsSquared(FV* results,FV** data,int *entries,int noEntries,int noBlk
 //to avoid unnecessary work.
 void getPrediction(FV* results,FV** data,float *params,int *entries,int noEntries,int noBlks)
 {
-    FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO(),acc4=FV_ZERO(),acc5=FV_ZERO();
     int j=0;
     do{
+        FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO(),acc4=FV_ZERO(),acc5=FV_ZERO();
         int iOrig=0;
         do{
-            int i=entries[i];
+            int i=entries[iOrig];
             FV p=FV_SET1(params[i]);
             acc0=fma(data[i][j],p,acc0);
             acc1=fma(data[i][j+1],p,acc1);
@@ -228,12 +244,12 @@ void getPrediction(FV* results,FV** data,float *params,int *entries,int noEntrie
             acc4=fma(data[i][j+4],p,acc4);
             acc5=fma(data[i][j+5],p,acc5);
         }while(++iOrig<noEntries);
-        results[j]=acc0;
-        results[j+1]=acc1;
-        results[j+2]=acc2;
-        results[j+3]=acc3;
-        results[j+4]=acc4;
-        results[j+5]=acc5;
+        FORCE_WRITE(results,j,acc0);
+        FORCE_WRITE(results,j+1,acc1);
+        FORCE_WRITE(results,j+2,acc2);
+        FORCE_WRITE(results,j+3,acc3);
+        FORCE_WRITE(results,j+4,acc4);
+        FORCE_WRITE(results,j+5,acc5);
         j=j+6;
     }while(j<noBlks);
 }
@@ -302,11 +318,16 @@ float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *para
         changes=changes>diff?changes:diff;
         //copy over into removers list
     }while(--noBlks>0);
-    return horizMax(changes);
+    return horizontalMax(changes);
 }
 
-void f(Memory *mem)
+void f(ControlData* control,Memory *mem)
 {
+    int sharedLambda=(FORCE_READ_INT(mem->sharedLambda,0))/NO_CPUS;
+    if(sharedLambda!=mem->thisLambda){
+        mem->thisLambda=sharedLambda;
+    }
+    float lambda=mem->thisLambda*control->lambdaStep;
     const int noBlks=5;
     int noRemovals;
     int removers[5*V_LN];
@@ -315,7 +336,6 @@ void f(Memory *mem)
     FV *corrections;
     FV *here;
     FV *params;
-    float lambda;
     int householderIter;
     float changeMagnitude=formAndSolveUpdate(result,others,corrections,here,params,lambda,noBlks,removers,noRemovals,householderIter);
     //put the results back into the correct place
