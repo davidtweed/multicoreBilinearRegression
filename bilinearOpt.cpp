@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <sys/mman.h>
@@ -8,11 +11,14 @@
 #define _GNU_SOURCE
 #endif
 #include <sched.h>
+//#include <atomic.h>
 
 #include <algorithm>
 #include <assert.h>
 
 //=============== Macro abstractions =================
+
+const float CONVERGENCE_THRESH=1e-6;
 
 #define SM2(x,y) ((x)+(y))
 #define SM4(x,y,z,w) SM2(SM2(x,y),SM2(z,w))
@@ -70,8 +76,7 @@ struct ControlData {
 };
 
 struct Memory {
-    float thisLambda;
-    float *sharedParams;
+    int thisLambda;
     FV** original;
     //publishedPredictions[NO_CPUS] is set to the sum of the predictions minus the goal
     FV* publishedPredictions[NO_CPUS+1];
@@ -79,12 +84,12 @@ struct Memory {
     FV*** perThread1;
     FV*** perThread2;
     FV*** perThread3;
-    int32_t* syncFutexes;
     int32_t* sharedLambda;
     int ourIdx;
-    int noParams;
+    int noParams;//number of parameters this thread is handling
     int noNonzeroParams;
     int* nonzeroParams;//local to the core working on this*/
+    int file;
 };
 
 //================== inter-CPU data reading/writing ===============
@@ -389,7 +394,6 @@ T*** add3DSuperstructure(void* raw,int noRows,int noCols)
 void setupSharedMemoryAreas(Memory *mem)
 {
     int r,c;
-    mem->sharedParams=reinterpret_cast<float*>(allocSharedArray(1));
     mem->original=add2DSuperstructure<FV>(allocSharedArray(0),r,c);
     for(int i=0;i<NO_CPUS;++i){
         mem->publishedPredictions[i]=reinterpret_cast<FV*>(allocSharedArray(0));
@@ -398,8 +402,8 @@ void setupSharedMemoryAreas(Memory *mem)
     mem->perThread1=0;
     mem->perThread2=0;
     mem->perThread3=0;
-    mem->syncFutexes=reinterpret_cast<int*>(allocSharedArray(0));
-    mem->syncFutexes[0]=NO_CPUS;
+    mem->sharedLambda=reinterpret_cast<int32_t*>(allocSharedArray(0));
+    *mem->sharedLambda=0;
     mem->ourIdx=-1;
 }
 
@@ -411,15 +415,28 @@ void figureLinearRegressionProblemDivision() {
 
 void exportSolution(ControlData *control,Memory *mem)
 {
+    char buffer[65];
+    int len=sprintf(buffer,"%g :: %g\n",mem->thisLambda*control->lambdaStep,0.0f);
+    int written=write(mem->file,buffer,len);
+    assert(written==len);
     for(int i=0;i<0;++i){
-        fprintf(stdout,"%u %g\n",i,(double)0.0f);
+        sprintf(buffer,"%u %g\n",i,(double)0.0f);
+        written=write(mem->file,buffer,len);
+        assert(written==len);
     }
-    fflush(stdout);
-
+    written=write(mem->file,"\n",1);
+    assert(written==len);
 }
 
-void runAThread(ControlData *control,Memory *mem)
+void threadStep(ControlData *control,Memory *mem)
 {
+    //Run one iteration
+    float maxChange;//=f();
+    //Indicate we're happy for lambda to increase.
+    if(maxChange<=CONVERGENCE_THRESH){
+        __sync_fetch_and_add(mem->sharedLambda,1);
+    }
+    //If we're the housekeeper thread update the predictions
     if(mem->ourIdx==0){
         FV* output;
         FV **in;
@@ -439,6 +456,12 @@ void runAThread(ControlData *control,Memory *mem)
     }
 }
 
+void runAThread(ControlData *control,Memory *mem)
+{
+    while(true){
+        threadStep(control,mem);
+    }
+}
 void
 fireUpForks(ControlData *control,Memory *mem)
 {
@@ -447,11 +470,12 @@ fireUpForks(ControlData *control,Memory *mem)
     for(int i=0;i<NO_CPUS;++i){
         pid_t thisPID;
         if((thisPID=getpid())!=0){//we're the child
-            //it's easier if our publication array is final pointer in array
-            FV* t=mem->publishedPredictions[i];
-            mem->publishedPredictions[i]=mem->publishedPredictions[NO_CPUS-1];
-            mem->publishedPredictions[NO_CPUS-1]=t;
-            mem->ourIdx=NO_CPUS-1;
+            {
+                char buffer[64];
+                sprintf(buffer,"output_%u",i);
+                mem->file=open("", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+            }
+            mem->ourIdx=i;
             cpu_set_t *cpu_mask=CPU_ALLOC(NO_CPUS);
             CPU_ZERO(cpu_mask);
             CPU_SET(i,cpu_mask);
