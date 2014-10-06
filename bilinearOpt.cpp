@@ -11,7 +11,6 @@
 #define _GNU_SOURCE
 #endif
 #include <sched.h>
-//#include <atomic.h>
 
 #include <algorithm>
 #include <assert.h>
@@ -89,6 +88,8 @@ struct Memory {
     int noParams;//number of parameters this thread is handling
     int noNonzeroParams;
     int* nonzeroParams;//local to the core working on this*/
+    bool signaledConvergence;/*has this thread converged for this value of lambda?*/
+    unsigned int *localToGlobalParamID;
     int file;
 };
 
@@ -331,6 +332,7 @@ void f(ControlData* control,Memory *mem)
     int sharedLambda=(FORCE_READ_INT(mem->sharedLambda,0))/NO_CPUS;
     if(sharedLambda!=mem->thisLambda){
         mem->thisLambda=sharedLambda;
+        mem->signaledConvergence=false;
     }
     float lambda=mem->thisLambda*control->lambdaStep;
     const int noBlks=5;
@@ -420,7 +422,7 @@ void exportSolution(ControlData *control,Memory *mem)
     int written=write(mem->file,buffer,len);
     assert(written==len);
     for(int i=0;i<0;++i){
-        sprintf(buffer,"%u %g\n",i,(double)0.0f);
+        sprintf(buffer,"%u %g\n",mem->localToGlobalParamID[i],(double)0.0f);
         written=write(mem->file,buffer,len);
         assert(written==len);
     }
@@ -433,8 +435,11 @@ void threadStep(ControlData *control,Memory *mem)
     //Run one iteration
     float maxChange;//=f();
     //Indicate we're happy for lambda to increase.
-    if(maxChange<=CONVERGENCE_THRESH){
+    if(!mem->signaledConvergence && maxChange<=CONVERGENCE_THRESH){
         __sync_fetch_and_add(mem->sharedLambda,1);
+        mem->signaledConvergence=true;
+        //write out optimum before we increase lambda
+        exportSolution(control,mem);
     }
     //If we're the housekeeper thread update the predictions
     if(mem->ourIdx==0){
@@ -458,6 +463,7 @@ void threadStep(ControlData *control,Memory *mem)
 
 void runAThread(ControlData *control,Memory *mem)
 {
+    mem->signaledConvergence=false;
     while(true){
         threadStep(control,mem);
     }
