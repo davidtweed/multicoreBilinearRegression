@@ -28,13 +28,12 @@ const float CONVERGENCE_THRESH=1e-6;
 
 #define HOUSEHOLDER_ITER (10)
 
-inline int read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,FI *input)
+inline int read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
 {
-    FV *p=(FV*)input;
-    *r0=p[0];
-    *r1=p[1];
-    *r2=p[2];
-    *r3=p[3];
+    *r0=p[0].fv;
+    *r1=p[1].fv;
+    *r2=p[2].fv;
+    *r3=p[3].fv;
     return 4;
 }
 
@@ -50,9 +49,9 @@ struct Memory {
     //publishedPredictions[NO_CPUS] is set to the sum of the predictions minus the goal
     FV* publishedPredictions[NO_CPUS+1];
     FV* parameterEstimates[NO_CPUS];
-    FV*** perThread1;
-    FV*** perThread2;
-    FV*** perThread3;
+    BagOfBits** perThread1;
+    BagOfBits*** perThread2;
+    BagOfBits*** perThread3;
     int32_t* sharedLambda;
     int ourIdx;
     int noParams;//number of parameters this thread is handling
@@ -211,7 +210,7 @@ void getCoeffsSquared(float* results,FV** data,int *entries,int noEntries,int no
 //If results is full of zeros and we use full params we get the full prediction.
 //If results is the old values and params is the change in parameter values then we get the
 //updated prediction.
-void getPrediction(FV* results,FV** data,float *params,int *entries,int noEntries,int noBlks)
+void getPrediction(FV* results,BagOfBits** data,float *params,int *entries,int noEntries,int noBlks)
 {
     int j=0;
     do{
@@ -220,10 +219,12 @@ void getPrediction(FV* results,FV** data,float *params,int *entries,int noEntrie
         do{
             int i=entries[iIdx];
             FV p=FV_SET1(params[i]);
-            acc0=FMA(data[i][j],p,acc0);
-            acc1=FMA(data[i][j+1],p,acc1);
-            acc2=FMA(data[i][j+2],p,acc2);
-            acc3=FMA(data[i][j+3],p,acc3);
+            FV d0,d1,d2,d3;
+            int adv=read32BitToFltVec(&d0,&d1,&d2,&d3,&(data[i][j]));
+            acc0=FMA(d0,p,acc0);
+            acc1=FMA(d1,p,acc1);
+            acc2=FMA(d2,p,acc2);
+            acc3=FMA(d3,p,acc3);
         }while(++iIdx<noEntries);
         FORCE_WRITE(results,j,results[j]+acc0);
         FORCE_WRITE(results,j+1,results[j+1]+acc1);

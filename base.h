@@ -7,6 +7,13 @@ typedef float FV __attribute__((vector_size(V_SZ)));
 typedef int FI __attribute__((vector_size(V_SZ)));
 typedef int BV __attribute__((vector_size(V_SZ)));
 
+struct BagOfBits {
+    union{
+        FV fv;
+        FI fi;
+    };
+};
+
 #if V_LN==8 /*kludgy way of detecting avx with its fma instruction*/
 #define FMA(a,b,c) (a)*(b)+(c)
 #define FV_SET1(x) {(x),(x),(x),(x),(x),(x),(x),(x)}
