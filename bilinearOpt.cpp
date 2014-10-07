@@ -1,3 +1,4 @@
+#include "base.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -19,14 +20,6 @@
 
 const float CONVERGENCE_THRESH=1e-6;
 
-#define SM2(x,y) ((x)+(y))
-#define SM4(x,y,z,w) SM2(SM2(x,y),SM2(z,w))
-#define SM8(a,b,c,d,e,f,g,h) SM2(SM4(a,b,c,d),SM4(e,f,g,h))
-
-#define SMF2(x,y) (FORCE_READ(x,i))+(FORCE_READ(y,i))
-#define SMF4(x,y,z,w) (SMF2(x,y))+(SMF2(z,w))
-#define SMF8(a,b,c,d,e,f,g,h) (SMF4(a,b,c,d))+(SMF4(e,f,g,h))
-
 #if L1_PENALTY
 #define OUTSIDE_THRESH_UPDATE updateL1
 #else
@@ -34,38 +27,15 @@ const float CONVERGENCE_THRESH=1e-6;
 #endif
 
 #define HOUSEHOLDER_ITER (10)
-#if 4==V_LN
-#define FV_SET1(x) {(x),(x),(x),(x)}
-#else
-#define FV_SET1(x) {(x),(x),(x),(x),(x),(x),(x),(x)}
-#endif
-#define FV_ZERO() FV_SET1(0.0f)
 
-#define V_SZ (4*V_LN)
-typedef float FV __attribute__((vector_size(V_SZ)));
-typedef int BV __attribute__((vector_size(V_SZ)));
-
-#if V_LN==8 /*kludgy way of detecting avx with its fma instruction*/
-#define fma(a,b,c) (a)*(b)+(c)
-#else
-#define fma(a,b,c) (a)*(b)+(c)
-#endif
-
-#define FORCE_READ_INT(p,o) (*((volatile int32_t*)((p)+o)))
-
-#define FORCE_READ(p,o) (*((volatile FV*)((p)+o)))
-#define FORCE_WRITE(p,i,x) (*(volatile FV*)((p)+i))=x
-
-inline
-float horizontalSum(FV v)
+inline int read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,FI *input)
 {
-    return 0;
-}
-
-inline
-float horizontalMax(FV v)
-{
-    return 0;
+    FV *p=(FV*)input;
+    *r0=p[0];
+    *r1=p[1];
+    *r2=p[2];
+    *r3=p[3];
+    return 4;
 }
 
 //================ Data structures =====================
@@ -108,7 +78,7 @@ float p2psum2(FV* output,FV **in,FV* target,int noBlks)
         FV r=SMF2(in[0],in[1]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
-        err=fma(r,r,err);
+        err=FMA(r,r,err);
     }while(++i<noBlks);
     return horizontalSum(err);
 }
@@ -121,7 +91,7 @@ float p2psum4(FV* output,FV **in,FV* target,int noBlks)
         FV r=SMF4(in[0],in[1],in[2],in[3]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
-        err=fma(r,r,err);
+        err=FMA(r,r,err);
     }while(++i<noBlks);
     return horizontalSum(err);
 }
@@ -134,7 +104,7 @@ float p2psum8(FV* output,FV **in,FV* target,int noBlks)
         FV r=SMF8(in[0],in[1],in[2],in[3],in[4],in[5],in[6],in[7]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
-        err=fma(r,r,err);
+        err=FMA(r,r,err);
     }while(++i<noBlks);
     return horizontalSum(err);
 }
@@ -148,7 +118,7 @@ float p2psum16(FV* output,FV **in,FV* target,int noBlks)
         r=r+SMF8(in[8],in[9],in[10],in[11],in[12],in[13],in[14],in[15]);
         r=r-target[i];
         FORCE_WRITE(output,i,r);
-        err=fma(r,r,err);
+        err=FMA(r,r,err);
     }while(++i<noBlks);
     return horizontalSum(err);
 }
@@ -167,12 +137,12 @@ void accSumOtherContributions(FV* results,FV* corrections,FV* residual,FV* multi
     int i=0;
     do{
         FV acc=FORCE_READ(residual,i);
-        bigAcc0=fma(acc,multipliers[0],bigAcc0);
-        bigAcc1=fma(acc,multipliers[1],bigAcc1);
-        bigAcc2=fma(acc,multipliers[2],bigAcc2);
-        bigAcc3=fma(acc,multipliers[3],bigAcc3);
-        bigAcc4=fma(acc,multipliers[4],bigAcc4);
-        bigAcc5=fma(acc,multipliers[5],bigAcc5);
+        bigAcc0=FMA(acc,multipliers[0],bigAcc0);
+        bigAcc1=FMA(acc,multipliers[1],bigAcc1);
+        bigAcc2=FMA(acc,multipliers[2],bigAcc2);
+        bigAcc3=FMA(acc,multipliers[3],bigAcc3);
+        bigAcc4=FMA(acc,multipliers[4],bigAcc4);
+        bigAcc5=FMA(acc,multipliers[5],bigAcc5);
         multipliers+=6;
     }while(++i<noBlks);
     results[0]=bigAcc0-corrections[0];
@@ -222,41 +192,44 @@ void getCoeffsSquared(float* results,FV** data,int *entries,int noEntries,int no
 {
     int i=0;
     do{
-        FV c=FV_ZERO();
+        FV a0=FV_ZERO(),a1=FV_ZERO(),a2=FV_ZERO(),a3=FV_ZERO();
         int j=0;
         do{
-            FV a=data[i][j];
-            c=fma(a,a,c);
-        }while(++j<noBlks);
-        results[i]=horizontalSum(c);
+            FV v0=data[i][j],v1=data[i][j+1],v2=data[i][j+2],v3=data[i][j+3];
+            a0=FMA(v0,v0,a0);
+            a1=FMA(v1,v1,a1);
+            a2=FMA(v2,v2,a2);
+            a3=FMA(v3,v3,a3);
+            j+=4;
+        }while(j<noBlks);
+        results[i]=horizontalSum(a0+a1+a2+a3);
     }while(++i<noEntries);
 }
 
 //Compute for each e sum_i a_i^(e) x_i , taking advantage of knowing which x_i are zero
 //to avoid unnecessary work.
+//If results is full of zeros and we use full params we get the full prediction.
+//If results is the old values and params is the change in parameter values then we get the
+//updated prediction.
 void getPrediction(FV* results,FV** data,float *params,int *entries,int noEntries,int noBlks)
 {
     int j=0;
     do{
-        FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO(),acc4=FV_ZERO(),acc5=FV_ZERO();
-        int iOrig=0;
+        FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO(),acc4=FV_ZERO();
+        int iIdx=0;
         do{
-            int i=entries[iOrig];
+            int i=entries[iIdx];
             FV p=FV_SET1(params[i]);
-            acc0=fma(data[i][j],p,acc0);
-            acc1=fma(data[i][j+1],p,acc1);
-            acc2=fma(data[i][j+2],p,acc2);
-            acc3=fma(data[i][j+3],p,acc3);
-            acc4=fma(data[i][j+4],p,acc4);
-            acc5=fma(data[i][j+5],p,acc5);
-        }while(++iOrig<noEntries);
-        FORCE_WRITE(results,j,acc0);
-        FORCE_WRITE(results,j+1,acc1);
-        FORCE_WRITE(results,j+2,acc2);
-        FORCE_WRITE(results,j+3,acc3);
-        FORCE_WRITE(results,j+4,acc4);
-        FORCE_WRITE(results,j+5,acc5);
-        j=j+6;
+            acc0=FMA(data[i][j],p,acc0);
+            acc1=FMA(data[i][j+1],p,acc1);
+            acc2=FMA(data[i][j+2],p,acc2);
+            acc3=FMA(data[i][j+3],p,acc3);
+        }while(++iIdx<noEntries);
+        FORCE_WRITE(results,j,results[j]+acc0);
+        FORCE_WRITE(results,j+1,results[j+1]+acc1);
+        FORCE_WRITE(results,j+2,results[j+2]+acc2);
+        FORCE_WRITE(results,j+3,results[j+3]+acc3);
+        j=j+4;
     }while(j<noBlks);
 }
 
@@ -347,6 +320,7 @@ void f(ControlData* control,Memory *mem)
     float changeMagnitude=formAndSolveUpdate(result,others,corrections,here,params,lambda,noBlks,removers,noRemovals,householderIter);
     //put the results back into the correct place
     float *arr=reinterpret_cast<float*>(result);
+    //now update the weights here
     int i;
     //remove new zeroes and compact the list of non-zeroParms------------------------------
     int readPt=0,copyPt;
