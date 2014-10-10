@@ -37,10 +37,12 @@ inline int read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
     return 4;
 }
 
+#define READER_FN read32BitToFltVec
 //================ Data structures =====================
 
 struct ControlData {
     float initLambda,lambdaStep;
+    int highestSharedLambda;
 };
 
 struct Memory {
@@ -214,13 +216,13 @@ void getPrediction(FV* results,BagOfBits** data,float *params,int *entries,int n
 {
     int j=0;
     do{
-        FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO(),acc4=FV_ZERO();
+        FV acc0=FV_ZERO(),acc1=FV_ZERO(),acc2=FV_ZERO(),acc3=FV_ZERO();
         int iIdx=0;
         do{
             int i=entries[iIdx];
             FV p=FV_SET1(params[i]);
             FV d0,d1,d2,d3;
-            int adv=read32BitToFltVec(&d0,&d1,&d2,&d3,&(data[i][j]));
+            int adv=READER_FN(&d0,&d1,&d2,&d3,&(data[i][j]));
             acc0=FMA(d0,p,acc0);
             acc1=FMA(d1,p,acc1);
             acc2=FMA(d2,p,acc2);
@@ -272,13 +274,17 @@ void solveDepressedCubic2(FV *result,FV p,FV q,FV x,float ambda,int householderI
 }
 
 //inline
+void updateL2(FV *result,FV p,FV q,FV x,float lambda,int householderIter)
+{
+
+}
+
+//inline
 void updateL1(FV *result,FV p,FV q,FV x,float lambda,int householderIter)
 {
     BV gtLambda=x>=lambda;
     *result=gtLambda ? (x-lambda) : (x+lambda);
 }
-
-
 
 float formAndSolveUpdate(FV* result,FV *others,FV *corrections,FV *here,FV *params,float lambda,int noBlks,int* removers,int &noRemovals,int householderIter)
 {
@@ -439,10 +445,11 @@ void threadStep(ControlData *control,Memory *mem)
 void runAThread(ControlData *control,Memory *mem)
 {
     mem->signaledConvergence=false;
-    while(true){
+    do{
         threadStep(control,mem);
-    }
+    }while(FORCE_READ_INT(mem->sharedLambda,0)<control->highestSharedLambda);
 }
+
 void
 fireUpForks(ControlData *control,Memory *mem)
 {
@@ -469,11 +476,16 @@ fireUpForks(ControlData *control,Memory *mem)
     exportSolution(control,mem);
 }
 
+void setupStructures(int argc,char* argv[],ControlData* ctrl,Memory* mem)
+{
+
+}
 
 int main(int argc,char* argv[])
 {
     ControlData ctrl;
     Memory mem;
+    setupStructures(argc,argv,&ctrl,&mem);
     fireUpForks(&ctrl,&mem);
 
     return 0;
