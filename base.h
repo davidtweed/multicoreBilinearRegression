@@ -11,6 +11,7 @@ struct BagOfBits {
     union{
         FV fv;
         FI fi;
+        float a[V_LN];
     };
 };
 
@@ -30,16 +31,32 @@ struct BagOfBits {
 #define FORCE_READ(p,o) (*((volatile FV*)((p)+o)))
 #define FORCE_WRITE(p,i,x) (*(volatile FV*)((p)+i))=x
 
+//TODO: replace this with better version using machine instructions
 inline
 float horizontalSum(FV v)
 {
-    return 0;
+    BagOfBits b;
+    b.fv=v;
+    if(V_LN==8){
+        return b.a[0]+b.a[1]+b.a[2]+b.a[3]+b.a[4]+b.a[5]+b.a[6]+b.a[7];
+    }else{
+        return b.a[0]+b.a[1]+b.a[2]+b.a[3];
+    }
 }
 
 inline
 float horizontalMax(FV v)
 {
-    return 0;
+    BagOfBits b;
+    b.fv=v;
+    float mx=b.a[0];
+    int i;
+    for(i=1;i<V_LN;++i){
+        if(b.a[i]>mx){
+            mx=b.a[i];
+        }
+    }
+    return mx;
 }
 
 #define SM2(x,y) ((x)+(y))
