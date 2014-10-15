@@ -62,6 +62,7 @@ struct Memory {
     bool signaledConvergence;/*has this thread converged for this value of lambda?*/
     unsigned int *localToGlobalParamID;
     int file;
+    float totalError;//only updated by process 0
 };
 
 //================== inter-CPU data reading/writing ===============
@@ -155,7 +156,7 @@ void accSumOtherContributions(FV* results,FV* corrections,FV* residual,FV* multi
 }
 
 
-
+#if 0
 /*
  *Write pre-prepared values into the published array for this unit.
  *Use FORCE_WRITE to ensure results are written immediately, and use
@@ -168,7 +169,7 @@ void writeContributionForThisUnit(FV* publish,FV *values,int noBlks)
         FORCE_WRITE(publish,i,values[i]);
     }while(++i<noBlks);
 }
-
+#endif
 //=========== Preparing "this CPU" problem components ============
 
 /*
@@ -398,16 +399,16 @@ void figureLinearRegressionProblemDivision() {
 
 void exportSolution(ControlData *control,Memory *mem)
 {
-    char buffer[65];
-    int len=sprintf(buffer,"%g :: %g\n",mem->thisLambda*control->lambdaStep,0.0f);
+    static char buffer[65];
+    int len=sprintf(buffer,"  %g : ( %g\n,{",mem->thisLambda*control->lambdaStep,mem->totalError);
     int written=write(mem->file,buffer,len);
     assert(written==len);
     for(int i=0;i<0;++i){
-        sprintf(buffer,"%u %g\n",mem->localToGlobalParamID[i],(double)0.0f);
+        sprintf(buffer,"    %u : %g,\n",mem->localToGlobalParamID[i],(double)0.0f);
         written=write(mem->file,buffer,len);
         assert(written==len);
     }
-    written=write(mem->file,"\n",1);
+    written=write(mem->file,"  }),\n",1);
     assert(written==len);
 }
 
@@ -429,13 +430,13 @@ void threadStep(ControlData *control,Memory *mem)
         FV* target;
         int noBlks;
         if(NO_CPUS==2){
-            p2psum2(output,in,target,noBlks);
+            mem->totalError=p2psum2(output,in,target,noBlks);
         }else if(NO_CPUS==4){
-            p2psum4(output,in,target,noBlks);
+            mem->totalError=p2psum4(output,in,target,noBlks);
         }else if(NO_CPUS==8){
-            p2psum8(output,in,target,noBlks);
+            mem->totalError=p2psum8(output,in,target,noBlks);
         }else if(NO_CPUS==16){
-            p2psum16(output,in,target,noBlks);
+            mem->totalError=p2psum16(output,in,target,noBlks);
         }else{
             abort();
         }
@@ -463,6 +464,7 @@ fireUpForks(ControlData *control,Memory *mem)
                 sprintf(buffer,"output_%u",i);
                 mem->file=open("", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
             }
+            write(mem->file,"data = {\n",10);
             mem->ourIdx=i;
             cpu_set_t *cpu_mask=CPU_ALLOC(NO_CPUS);
             CPU_ZERO(cpu_mask);
@@ -470,6 +472,7 @@ fireUpForks(ControlData *control,Memory *mem)
             int err=sched_setaffinity(0,sizeof(cpu_set_t),cpu_mask);
             CPU_FREE(cpu_mask);
             runAThread(control,mem);
+            write(mem->file,"  }\n",4);
             _exit(0);
         }
     }
@@ -478,7 +481,7 @@ fireUpForks(ControlData *control,Memory *mem)
 
 void setupStructures(int argc,char* argv[],ControlData* ctrl,Memory* mem)
 {
-
+    mem->totalError=0.0;
 }
 
 int main(int argc,char* argv[])
