@@ -37,6 +37,15 @@ inline int read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
     return 4;
 }
 
+#define writeWrapper write
+void abortIfNot(int x,int val)
+{
+    if(x==val) {
+        return;
+    }
+    abort();
+}
+
 #define READER_FN read32BitToFltVec
 //================ Data structures =====================
 
@@ -155,21 +164,6 @@ void accSumOtherContributions(FV* results,FV* corrections,FV* residual,FV* multi
     results[5]=bigAcc5-corrections[5];
 }
 
-
-#if 0
-/*
- *Write pre-prepared values into the published array for this unit.
- *Use FORCE_WRITE to ensure results are written immediately, and use
- *a loop to minimise time values from different passes exist in the cache.
- */
-void writeContributionForThisUnit(FV* publish,FV *values,int noBlks)
-{
-    int i=0;
-    do{
-        FORCE_WRITE(publish,i,values[i]);
-    }while(++i<noBlks);
-}
-#endif
 //=========== Preparing "this CPU" problem components ============
 
 /*
@@ -400,30 +394,21 @@ void figureLinearRegressionProblemDivision() {
 void exportSolution(ControlData *control,Memory *mem)
 {
     static char buffer[65];
-    int len=sprintf(buffer,"  %g : ( %g\n,{",mem->thisLambda*control->lambdaStep,mem->totalError);
-    int written=write(mem->file,buffer,len);
-    assert(written==len);
+    int len=sprintf(buffer,"  %g : ( %g\n,{",mem->thisLambda*control->lambdaStep,mem->totalError)-1;
+    abortIfNot(writeWrapper(mem->file,buffer,len),len);
     for(int i=0;i<0;++i){
-        sprintf(buffer,"    %u : %g,\n",mem->localToGlobalParamID[i],(double)0.0f);
-        written=write(mem->file,buffer,len);
-        assert(written==len);
+        len=sprintf(buffer,"    %u : %g,\n",mem->localToGlobalParamID[i],(double)0.0f)-1;
+        abortIfNot(writeWrapper(mem->file,buffer,len),len);
     }
-    written=write(mem->file,"  }),\n",1);
-    assert(written==len);
+    abortIfNot(writeWrapper(mem->file,"  }),\n",6),6);
 }
 
 void threadStep(ControlData *control,Memory *mem)
 {
     //Run one iteration
     float maxChange;//=f();
-    //Indicate we're happy for lambda to increase.
-    if(!mem->signaledConvergence && maxChange<=CONVERGENCE_THRESH){
-        __sync_fetch_and_add(mem->sharedLambda,1);
-        mem->signaledConvergence=true;
-        //write out optimum before we increase lambda
-        exportSolution(control,mem);
-    }
     //If we're the housekeeper thread update the predictions
+    //also figure out the total error before we do a possible exportSolution().
     if(mem->ourIdx==0){
         FV* output;
         FV **in;
@@ -441,6 +426,13 @@ void threadStep(ControlData *control,Memory *mem)
             abort();
         }
     }
+    //Indicate we're happy for lambda to increase.
+    if(!mem->signaledConvergence && maxChange<=CONVERGENCE_THRESH){
+        __sync_fetch_and_add(mem->sharedLambda,1);
+        mem->signaledConvergence=true;
+        //write out optimum before we increase lambda
+        exportSolution(control,mem);
+    }
 }
 
 void runAThread(ControlData *control,Memory *mem)
@@ -449,6 +441,8 @@ void runAThread(ControlData *control,Memory *mem)
     do{
         threadStep(control,mem);
     }while(FORCE_READ_INT(mem->sharedLambda,0)<control->highestSharedLambda);
+    //since we write out when setting a new lambda, we have one final solution to output
+    exportSolution(control,mem);
 }
 
 void
@@ -459,29 +453,38 @@ fireUpForks(ControlData *control,Memory *mem)
     for(int i=0;i<NO_CPUS;++i){
         pid_t thisPID;
         if((thisPID=getpid())!=0){//we're the child
+            mem->ourIdx=i;
             {
+                //set up the output file for this process
                 char buffer[64];
                 sprintf(buffer,"output_%u",i);
                 mem->file=open("", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+                if(mem->file<0){
+                    abort();
+                }
+                int len=sprintf(buffer,"data%u = {\n",mem->ourIdx)-1;
+                abortIfNot(writeWrapper(mem->file,buffer,len),len);
             }
-            write(mem->file,"data = {\n",10);
-            mem->ourIdx=i;
+            //arrange for one process per CPU
             cpu_set_t *cpu_mask=CPU_ALLOC(NO_CPUS);
             CPU_ZERO(cpu_mask);
             CPU_SET(i,cpu_mask);
-            int err=sched_setaffinity(0,sizeof(cpu_set_t),cpu_mask);
+            abortIfNot(sched_setaffinity(0,sizeof(cpu_set_t),cpu_mask),0);
             CPU_FREE(cpu_mask);
+            //do the optimization
             runAThread(control,mem);
-            write(mem->file,"  }\n",4);
+            //finalise the data written to disc
+            abortIfNot(writeWrapper(mem->file,"  }\n",4),4);
+            abortIfNot(fdatasync(mem->file),0);
+            abortIfNot(close(mem->file),0);
             _exit(0);
         }
     }
-    exportSolution(control,mem);
 }
 
 void setupStructures(int argc,char* argv[],ControlData* ctrl,Memory* mem)
 {
-    mem->totalError=0.0;
+    mem->totalError=-1.0;//minimum valid error is at least 0.0.
 }
 
 int main(int argc,char* argv[])
@@ -490,6 +493,5 @@ int main(int argc,char* argv[])
     Memory mem;
     setupStructures(argc,argv,&ctrl,&mem);
     fireUpForks(&ctrl,&mem);
-
     return 0;
 }
