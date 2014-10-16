@@ -394,13 +394,14 @@ void figureLinearRegressionProblemDivision() {
 void exportSolution(ControlData *control,Memory *mem)
 {
     static char buffer[65];
-    int len=sprintf(buffer,"  %g : ( %g\n,{",mem->thisLambda*control->lambdaStep,mem->totalError)-1;
+    int len=sprintf(buffer,"  %g : ( %g,\n    {%u:%g",mem->thisLambda*control->lambdaStep,mem->totalError,0,0.0f);
     abortIfNot(writeWrapper(mem->file,buffer,len),len);
-    for(int i=0;i<0;++i){
-        len=sprintf(buffer,"    %u : %g,\n",mem->localToGlobalParamID[i],(double)0.0f)-1;
+    for(int i=1;i<mem->noParams;++i){
+        len=sprintf(buffer,", %u:%g",i/*mem->localToGlobalParamID[i]*/,(double)0.0f);
         abortIfNot(writeWrapper(mem->file,buffer,len),len);
     }
-    abortIfNot(writeWrapper(mem->file,"  }),\n",6),6);
+    len=sprintf(buffer,"}),\n");
+    abortIfNot(writeWrapper(mem->file,buffer,len),len);
 }
 
 void threadStep(ControlData *control,Memory *mem)
@@ -458,7 +459,7 @@ fireUpForks(ControlData *control,Memory *mem)
                 //set up the output file for this process
                 char buffer[64];
                 sprintf(buffer,"output_%u",i);
-                mem->file=open("", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+                mem->file=open(buffer, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
                 if(mem->file<0){
                     abort();
                 }
