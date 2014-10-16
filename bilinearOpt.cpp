@@ -20,9 +20,11 @@
 
 const float CONVERGENCE_THRESH=1e-6;
 
-#if L1_PENALTY
+#if PENALTY_CODE==1
 #define OUTSIDE_THRESH_UPDATE updateL1
-#else
+#elsif PENALTY_CODE==2
+#define OUTSIDE_THRESH_UPDATE solveDepressedCubic2
+#else /*L_{1/2} penalty if nothing else specified*/
 #define OUTSIDE_THRESH_UPDATE solveDepressedCubic2
 #endif
 

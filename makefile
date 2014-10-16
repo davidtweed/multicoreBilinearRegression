@@ -1,8 +1,13 @@
-TYPE=1 #L1 PENALTY
-#TYPE=0 #L1/2 PENALTY
+#TYPE=1: L1, TYPE=2 : L2, othewise: L_{1/2}
+TYPE=1
+#Number of CPUs to be used
+CPUS_AVAIL=4
 
-OPTS=-DNO_CPUS=4 -mssse3 -DV_LN="(4)"
-#OPTS=-DL1_PENALTY=${TYPE} -DNO_CPUS=4 -mavx -mavx2 -DV_LN="(8)" -mfma -ffast-math
+COMMON=-DPENALTY=${TYPE} -DNO_CPUS=${CPUS_AVAIL}
+# Non AVX/AVX2 options
+OPTS=${COMMON} -mssse3 -DV_LN="(4)" -ffast-math
+# AVX/AVX2 options
+#OPTS=${COMMON} -mavx -mavx2 -DV_LN="(8)" -mfma -ffast-math
 
 a.out: bilinearOpt.cpp base.h
 	g++ -O3 -g ${OPTS} bilinearOpt.cpp -lm
