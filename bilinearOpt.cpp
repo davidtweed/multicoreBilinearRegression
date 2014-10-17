@@ -28,15 +28,15 @@ const float CONVERGENCE_THRESH=1e-6;
 #define OUTSIDE_THRESH_UPDATE solveDepressedCubic2
 #endif
 
-#define HOUSEHOLDER_ITER (10)
+const int HOUSEHOLDER_ITER=10;
 
-inline int read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
+const int READER_FN_ADVANCE=4;//A reading advances in the stream this many BagOfBits
+inline void read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
 {
     *r0=p[0].fv;
     *r1=p[1].fv;
     *r2=p[2].fv;
     *r3=p[3].fv;
-    return 4;
 }
 
 #define writeWrapper write
@@ -186,19 +186,20 @@ void prepareMultipliers(FV* multipliers,int noBlks)
 
 //=================== general computations ===================
 //Compute for fixed I's the  sum_e a_I^(e)^2
-void getCoeffsSquared(float* results,FV** data,int *entries,int noEntries,int noBlks)
+void getCoeffsSquared(float* results,BagOfBits** data,int *entries,int noEntries,int noBlks)
 {
     int i=0;
     do{
         FV a0=FV_ZERO(),a1=FV_ZERO(),a2=FV_ZERO(),a3=FV_ZERO();
         int j=0;
         do{
-            FV v0=data[i][j],v1=data[i][j+1],v2=data[i][j+2],v3=data[i][j+3];
+            FV v0,v1,v2,v3;
+            READER_FN(&v0,&v1,&v2,&v3,&(data[i][j]));
             a0=FMA(v0,v0,a0);
             a1=FMA(v1,v1,a1);
             a2=FMA(v2,v2,a2);
             a3=FMA(v3,v3,a3);
-            j+=4;
+            j+=READER_FN_ADVANCE;
         }while(j<noBlks);
         results[i]=horizontalSum(a0+a1+a2+a3);
     }while(++i<noEntries);
@@ -219,7 +220,7 @@ void getPrediction(FV* results,BagOfBits** data,float *params,int *entries,int n
             int i=entries[iIdx];
             FV p=FV_SET1(params[i]);
             FV d0,d1,d2,d3;
-            int adv=READER_FN(&d0,&d1,&d2,&d3,&(data[i][j]));
+            READER_FN(&d0,&d1,&d2,&d3,&(data[i][j]));
             acc0=FMA(d0,p,acc0);
             acc1=FMA(d1,p,acc1);
             acc2=FMA(d2,p,acc2);
@@ -229,7 +230,7 @@ void getPrediction(FV* results,BagOfBits** data,float *params,int *entries,int n
         FORCE_WRITE(results,j+1,results[j+1]+acc1);
         FORCE_WRITE(results,j+2,results[j+2]+acc2);
         FORCE_WRITE(results,j+3,results[j+3]+acc3);
-        j=j+4;
+        j=j+READER_FN_ADVANCE;
     }while(j<noBlks);
 }
 
