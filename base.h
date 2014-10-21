@@ -1,6 +1,9 @@
 #ifndef __BASE_H__
 #define __BASE_H__
 
+#include <stdlib.h>
+#include <unistd.h>
+
 #define V_SZ (4*V_LN)
 
 typedef float FV __attribute__((vector_size(V_SZ)));
@@ -30,6 +33,28 @@ struct BagOfBits {
 
 #define FORCE_READ(p,o) (*((volatile FV*)((p)+o)))
 #define FORCE_WRITE(p,i,x) (*(volatile FV*)((p)+i))=x
+
+template<typename T>
+inline
+T abortIf(T x,T val)
+{
+    if(x==val) {
+        write(2,"abortIf failure\n",16);
+        abort();
+    }
+    return x;
+}
+
+template<typename T>
+inline
+void abortIfNot(T x,T val)
+{
+    if(x!=val) {
+        write(2,"abortIfNot failure\n",19);
+        abort();
+    }
+}
+
 
 //TODO: replace this with better version using machine instructions
 inline

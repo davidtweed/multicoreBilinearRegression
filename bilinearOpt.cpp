@@ -40,13 +40,6 @@ inline void read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
 }
 
 #define writeWrapper write
-void abortIfNot(int x,int val)
-{
-    if(x==val) {
-        return;
-    }
-    abort();
-}
 
 #define READER_FN read32BitToFltVec
 //================ Data structures =====================
@@ -346,7 +339,7 @@ void f(ControlData* control,Memory *mem)
 
 void* allocSharedArray(int no32BitWords)
 {
-    void *p=mmap(0,4*no32BitWords,PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS,0,0);
+    void *p=abortIf(mmap(0,4*no32BitWords,PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS,0,0),MAP_FAILED);
     return p;
 }
 
@@ -455,17 +448,14 @@ fireUpForks(ControlData *control,Memory *mem)
     pid_t pids[NO_CPUS];
     pid_t parentPID=getpid();
     for(int i=0;i<NO_CPUS;++i){
-        pid_t thisPID;
-        if((thisPID=getpid())!=0){//we're the child
+        pid_t thisPID=abortIf(fork(),-1);
+        if(thisPID==0){//we're the child
             mem->ourIdx=i;
             {
                 //set up the output file for this process
                 char buffer[64];
                 sprintf(buffer,"output_%u",i);
-                mem->file=open(buffer, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
-                if(mem->file<0){
-                    abort();
-                }
+                mem->file=abortIf(open(buffer, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR),-1);
                 int len=sprintf(buffer,"data%u = {\n",mem->ourIdx)-1;
                 abortIfNot(writeWrapper(mem->file,buffer,len),len);
             }
