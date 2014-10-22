@@ -39,7 +39,7 @@ inline
 T abortIf(T x,T val)
 {
     if(x==val) {
-        write(2,"abortIf failure\n",16);
+        int w=write(2,"abortIf failure\n",16);
         abort();
     }
     return x;
@@ -50,7 +50,7 @@ inline
 void abortIfNot(T x,T val)
 {
     if(x!=val) {
-        write(2,"abortIfNot failure\n",19);
+        int w=write(2,"abortIfNot failure\n",19);
         abort();
     }
 }

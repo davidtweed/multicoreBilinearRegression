@@ -47,6 +47,7 @@ inline void read32BitToFltVec(FV *r0,FV *r1, FV* r2,FV *r3,BagOfBits *p)
 struct ControlData {
     float initLambda,lambdaStep;
     int highestSharedLambda;
+    char* outfileBase;
 };
 
 struct Memory {
@@ -456,7 +457,7 @@ fireUpForks(ControlData *control,Memory *mem)
                 char buffer[64];
                 sprintf(buffer,"output_%u",i);
                 mem->file=abortIf(open(buffer, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR),-1);
-                int len=sprintf(buffer,"data%u = {\n",mem->ourIdx)-1;
+                int len=sprintf(buffer,"%s%.2u = {\n",control->outfileBase,mem->ourIdx)-1;
                 abortIfNot(writeWrapper(mem->file,buffer,len),len);
             }
             //arrange for one process per CPU
@@ -476,8 +477,23 @@ fireUpForks(ControlData *control,Memory *mem)
     }
 }
 
+/*Arguments giving the problem spec:
+ *argv[1] - filename,
+ *argv[2] - no of examples,
+ *argv[3] - no of rows per example,
+ *argv[4] - no of columns per example
+ *argv[5] - output file base
+ *argv[6] - use linear or bilinear fitting
+ */
+void getProblemData(char* argv[],ControlData* ctrl,Memory *mem)
+{
+}
+
 void setupStructures(int argc,char* argv[],ControlData* ctrl,Memory* mem)
 {
+    abortIfNot(argc,7);
+    getProblemData(argv,ctrl,mem);
+    ctrl->outfileBase=strdup(argv[5]);
     mem->totalError=-1.0;//minimum valid error is at least 0.0.
 }
 
